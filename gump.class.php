@@ -325,7 +325,7 @@ class GUMP
                         }
                     }
 
-                    $value = filter_var($value, FILTER_SANITIZE_STRING);
+                    $value = filter_var($value, FILTER_SANITIZE_STRING, FILTER_FLAG_NO_ENCODE_QUOTES); // IC 20150804 don't encode quotes
                 }
 
                 $return[$field] = $value;
@@ -856,7 +856,7 @@ class GUMP
      */
     protected function filter_sanitize_string($value, $params = null)
     {
-        return filter_var($value, FILTER_SANITIZE_STRING);
+        return filter_var($value, FILTER_SANITIZE_STRING, FILTER_FLAG_NO_ENCODE_QUOTES); // IC 20150804 don't encode quotes
     }
 
     /**
@@ -1223,7 +1223,7 @@ class GUMP
             return;
         }
 
-        if (!preg_match('/^([a-zÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïðòóôõöùúûüýÿ])+$/i', $input[$field]) !== false) {
+        if (!preg_match('/^([\p{L}])+$/u', $input[$field]) !== false) { // IC 20160119 allow UTF8
             return array(
                 'field' => $field,
                 'value' => $input[$field],
@@ -1250,7 +1250,7 @@ class GUMP
             return;
         }
 
-        if (!preg_match('/^([a-z0-9ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïðòóôõöùúûüýÿ])+$/i', $input[$field]) !== false) {
+        if (!preg_match('/^([\p{N}\p{L}])+$/u', $input[$field]) !== false) { // IC 20160119 allow UTF8
             return array(
                 'field' => $field,
                 'value' => $input[$field],
@@ -1277,7 +1277,7 @@ class GUMP
             return;
         }
 
-        if (!preg_match('/^([a-z0-9ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïðòóôõöùúûüýÿ_-])+$/i', $input[$field]) !== false) {
+		if (!preg_match('/^([\p{N}\p{L}_-])+$/u', $input[$field]) !== false) { // IC 20160119 allow UTF8
             return array(
                 'field' => $field,
                 'value' => $input[$field],
@@ -1304,7 +1304,7 @@ class GUMP
             return;
         }
 
-        if (!preg_match("/^([a-z0-9ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïðòóôõöùúûüýÿ\s])+$/i", $input[$field]) !== false) {
+		if (!preg_match("/^([\p{N}\p{L}\s])+$/u", $input[$field]) !== false) { // IC 20160119 allow UTF8
             return array(
                 'field' => $field,
                 'value' => $input[$field],
