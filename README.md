@@ -6,10 +6,10 @@ Follow along on the project board: http://d.monsterboards.co/project/LSCPVmHUxQ-
 
 #### There are 2 ways to install GUMP
 
-###### Install Manually 
+###### Install Manually
 
 1. Download GUMP
-2. Unzip it and copy the directory into your PHP project directory. 
+2. Unzip it and copy the directory into your PHP project directory.
 
 Include it in your project:
 
@@ -48,32 +48,32 @@ Then open your terminal in your project directory and run:
 
 ```php
 // Shorthand validation
-is_valid(array $data, array $rules) 
+is_valid(array $data, array $rules)
 
 // Get or set the validation rules
-validation_rules(array $rules); 
+validation_rules(array $rules);
 
 // Get or set the filtering rules
-filter_rules(array $rules); 
+filter_rules(array $rules);
 
 // Runs the filter and validation routines
-run(array $data); 
+run(array $data);
 
 // Strips and encodes unwanted characters
-xss_clean(array $data); 
+xss_clean(array $data);
 
-// Sanitizes data and converts strings to UTF-8 (if available), 
+// Sanitizes data and converts strings to UTF-8 (if available),
 // optionally according to the provided field whitelist
-sanitize(array $input, $whitelist = NULL); 
+sanitize(array $input, $whitelist = NULL);
 
 // Validates input data according to the provided ruleset (see example)
-validate(array $input, array $ruleset); 
+validate(array $input, array $ruleset);
 
 // Filters input data according to the provided filterset (see example)
-filter(array $input, array $filterset); 
+filter(array $input, array $filterset);
 
 // Returns human readable error text in an array or string
-get_readable_errors($convert_to_string = false); 
+get_readable_errors($convert_to_string = false);
 
 // Fetch an array of validation errors indexed by the field names
 get_errors_array();
@@ -196,8 +196,8 @@ Available Validators
 * valid_cc `Check for a valid credit card number (Uses the MOD10 Checksum Algorithm)`
 * valid_name `Check for a valid format human name`
 * contains,n `Verify that a value is contained within the pre-defined value set`
-* containsList,n `Verify that a value is contained within the pre-defined value set. The list of valid values must be provided in semicolon-separated list format (like so: value1;value2;value3;..;valuen). If a validation error occurs, the list of valid values is not revelead (this means, the error will just say the input is invalid, but it won't reveal the valid set to the user.`
-* doesNotcontainList,n `Verify that a value is not contained within the pre-defined value set. Semicolon (;) separated, list not outputted. See the rule above for more info.`
+* contains_list,n `Verify that a value is contained within the pre-defined value set. The list of valid values must be provided in semicolon-separated list format (like so: value1;value2;value3;..;valuen). If a validation error occurs, the list of valid values is not revelead (this means, the error will just say the input is invalid, but it won't reveal the valid set to the user.`
+* doesnt_contain_list,n `Verify that a value is not contained within the pre-defined value set. Semicolon (;) separated, list not outputted. See the rule above for more info.`
 * street_address `Checks that the provided string is a likely street address. 1 number, 1 or more space, 1 or more letters`
 * iban `Check for a valid IBAN`
 * min_numeric `Determine if the provided numeric value is higher or equal to a specific value`
@@ -217,6 +217,7 @@ Filters can be any PHP function that returns a string. You don't need to create 
 * htmlencode `Encode HTML entities`
 * sanitize_email `Remove illegal characters from email addresses`
 * sanitize_numbers `Remove any non-numeric characters`
+* sanitize_floats `Remove any non-float characters`
 * trim `Remove spaces from the beginning and end of strings`
 * base64_encode `Base64 encode the input`
 * base64_decode `Base64 decode the input`
@@ -228,6 +229,10 @@ Filters can be any PHP function that returns a string. You don't need to create 
 * rmpunctuation `Remove all known punctuation characters from a string`
 * basic_tags `Remove all layout orientated HTML tags from text. Leaving only basic tags`
 * whole_number `Ensure that the provided numeric value is represented as a whole number`
+* ms_word_characters `Converts MS Word special characters [“”‘’–…] to web safe characters`
+* lower_case `Converts to lowercase`
+* upper_case `Converts to uppercase`
+* slug `Creates web safe url slug`
 
 #  Creating your own validators and filters
 
@@ -236,8 +241,8 @@ Adding custom validators and filters is made easy by using callback functions.
 ```php
 require("gump.class.php");
 
-/* 
-   Create a custom validation rule named "is_object".   
+/*
+   Create a custom validation rule named "is_object".
    The callback receives 3 arguments:
    The field to validate, the values being validated, and any parameters used in the validation rule.
    It should return a boolean value indicating whether the value is valid.
@@ -246,7 +251,7 @@ GUMP::add_validator("is_object", function($field, $input, $param = NULL) {
     return is_object($input[$field]);
 });
 
-/* 
+/*
    Create a custom filter named "upper".
    The callback function receives two arguments:
    The value to filter, and any parameters used in the filter rule. It should returned the filtered value.

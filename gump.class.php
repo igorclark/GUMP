@@ -1,18 +1,16 @@
 <?php
-
 /**
  * GUMP - A fast, extensible PHP input validation class.
  *
  * @author      Sean Nieuwoudt (http://twitter.com/SeanNieuwoudt)
- * @copyright   Copyright (c) 2015 wixelhq.com
+ * @author      Filis Futsarov (http://twitter.com/FilisCode)
+ * @copyright   Copyright (c) 2017 wixelhq.com
  *
- * @link        http://github.com/Wixel/GUMP
- *
- * @version     1.0
+ * @version     1.5
  */
 class GUMP
 {
-    //Singleton instance of GUMP
+    // Singleton instance of GUMP
     protected static $instance = null;
 
     // Validation rules for execution
@@ -30,8 +28,12 @@ class GUMP
     // Custom validation methods
     protected static $validation_methods = array();
 
+    // Custom validation methods error messages and custom ones
+    protected static $validation_methods_errors = array();
+
     // Customer filter methods
     protected static $filter_methods = array();
+
 
     // ** ------------------------- Instance Helper ---------------------------- ** //
     /**
@@ -43,11 +45,10 @@ class GUMP
     public static function get_instance(){
         if(self::$instance === null)
         {
-            self::$instance = new self();
+            self::$instance = new static();
         }
         return self::$instance;
     }
-
 
 
     // ** ------------------------- Validation Data ------------------------------- ** //
@@ -55,18 +56,34 @@ class GUMP
     public static $basic_tags = '<br><p><a><strong><b><i><em><img><blockquote><code><dd><dl><hr><h1><h2><h3><h4><h5><h6><label><ul><li><span><sub><sup>';
 
     public static $en_noise_words = "about,after,all,also,an,and,another,any,are,as,at,be,because,been,before,
-				  				  	 being,between,both,but,by,came,can,come,could,did,do,each,for,from,get,
-				  				  	 got,has,had,he,have,her,here,him,himself,his,how,if,in,into,is,it,its,it's,like,
-			      				  	 make,many,me,might,more,most,much,must,my,never,now,of,on,only,or,other,
-				  				  	 our,out,over,said,same,see,should,since,some,still,such,take,than,that,
-				  				  	 the,their,them,then,there,these,they,this,those,through,to,too,under,up,
-				  				  	 very,was,way,we,well,were,what,where,which,while,who,with,would,you,your,a,
-				  				  	 b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,$,1,2,3,4,5,6,7,8,9,0,_";
+                                     being,between,both,but,by,came,can,come,could,did,do,each,for,from,get,
+                                     got,has,had,he,have,her,here,him,himself,his,how,if,in,into,is,it,its,it's,like,
+                                     make,many,me,might,more,most,much,must,my,never,now,of,on,only,or,other,
+                                     our,out,over,said,same,see,should,since,some,still,such,take,than,that,
+                                     the,their,them,then,there,these,they,this,those,through,to,too,under,up,
+                                     very,was,way,we,well,were,what,where,which,while,who,with,would,you,your,a,
+                                     b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,$,1,2,3,4,5,6,7,8,9,0,_";
 
     // field characters below will be replaced with a space.
     protected $fieldCharsToRemove = array('_', '-');
 
+    protected $lang;
+
+
     // ** ------------------------- Validation Helpers ---------------------------- ** //
+
+    public function __construct($lang = 'en')
+    {
+        if ($lang) {
+            $lang_file = __DIR__.DIRECTORY_SEPARATOR.'lang'.DIRECTORY_SEPARATOR.$lang.'.php';
+
+            if (file_exists($lang_file)) {
+                $this->lang = $lang;
+            } else {
+                throw new \Exception('Language with key "'.$lang.'" does not exist');
+            }
+        }
+    }
 
     /**
      * Shorthand method for inline validation.
@@ -137,12 +154,13 @@ class GUMP
      *
      * @param string   $rule
      * @param callable $callback
+     * @param string   $error_message
      *
      * @return bool
      *
      * @throws Exception
      */
-    public static function add_validator($rule, $callback)
+    public static function add_validator($rule, $callback, $error_message = null)
     {
         $method = 'validate_'.$rule;
 
@@ -151,6 +169,9 @@ class GUMP
         }
 
         self::$validation_methods[$rule] = $callback;
+        if ($error_message) {
+            self::$validation_methods_errors[$rule] = $error_message;
+        }
 
         return true;
     }
@@ -236,17 +257,20 @@ class GUMP
      *
      * @param array $data
      * @param bool  $check_fields
+     * @param string $rules_delimiter
+     * @param string $parameters_delimiters
      *
      * @return array
      *
      * @throws Exception
      */
-    public function run(array $data, $check_fields = false)
+    public function run(array $data, $check_fields = false, $rules_delimiter='|', $parameters_delimiters=',')
     {
-        $data = $this->filter($data, $this->filter_rules());
+        $data = $this->filter($data, $this->filter_rules(), $rules_delimiter, $parameters_delimiters);
 
         $validated = $this->validate(
-            $data, $this->validation_rules()
+            $data, $this->validation_rules(),
+            $rules_delimiter, $parameters_delimiters
         );
 
         if ($check_fields === true) {
@@ -306,7 +330,7 @@ class GUMP
             } else {
                 $value = $input[$field];
                 if (is_array($value)) {
-                    $value = null;
+                    $value = $this->sanitize($value);
                 }
                 if (is_string($value)) {
                     if ($magic_quotes === true) {
@@ -347,82 +371,102 @@ class GUMP
 
     /**
      * Perform data validation against the provided ruleset.
+     * If any rule's parameter contains either '|' or ',', the corresponding default separator can be changed
      *
      * @param mixed $input
      * @param array $ruleset
+     * @param string $rules_delimiter
+     * @param string $parameters_delimiter
      *
      * @return mixed
      *
      * @throws Exception
      */
-    public function validate(array $input, array $ruleset)
+    public function validate(array $input, array $ruleset, $rules_delimiter='|', $parameters_delimiter=',')
     {
         $this->errors = array();
 
         foreach ($ruleset as $field => $rules) {
 
-            $rules = explode('|', $rules);
+            $rules = explode($rules_delimiter, $rules);
 
-            if (in_array('required', $rules) || (isset($input[$field]) && !is_array($input[$field]))) {
-                foreach ($rules as $rule) {
-                    $method = null;
-                    $param = null;
+            $look_for = array('required_file', 'required');
 
-                    // Check if we have rule parameters
-                    if (strstr($rule, ',') !== false) {
-                        $rule   = explode(',', $rule);
-                        $method = 'validate_'.$rule[0];
-                        $param  = $rule[1];
-                        $rule   = $rule[0];
+            if (count(array_intersect($look_for, $rules)) > 0 || (isset($input[$field]))) {
+
+                if (isset($input[$field])) {
+                    if (is_array($input[$field]) && in_array('required_file', $ruleset)) {
+                        $input_array = $input[$field];
                     } else {
-                        $method = 'validate_'.$rule;
+                        $input_array = array($input[$field]);
                     }
+                } else {
+                    $input_array = array('');
+                }
 
-                    //self::$validation_methods[$rule] = $callback;
+                foreach ($input_array as $value) {
 
-                    if (is_callable(array($this, $method))) {
-                        $result = $this->$method(
-                          $field, $input, $param
-                        );
+                    $input[$field] = $value;
 
-                        if (is_array($result)) {
-                            $this->errors[] = $result;
+                    foreach ($rules as $rule) {
+                        $method = null;
+                        $param = null;
+
+                        // Check if we have rule parameters
+                        if (strstr($rule, $parameters_delimiter) !== false) {
+                            $rule   = explode($parameters_delimiter, $rule);
+                            $method = 'validate_'.$rule[0];
+                            $param  = $rule[1];
+                            $rule   = $rule[0];
+
+                            // If there is a reference to a field
+                            if (preg_match('/(?:(?:^|;)_([a-z_]+))/', $param, $matches)) {
+
+                                // If provided parameter is a field
+                                if (isset($input[$matches[1]])) {
+                                    $param = str_replace('_'.$matches[1], $input[$matches[1]], $param);
+                                }
+                            }
+                        } else {
+                            $method = 'validate_'.$rule;
                         }
-                    } elseif(isset(self::$validation_methods[$rule])) {
 
-                        $result = call_user_func(self::$validation_methods[$rule], $field, $input, $param);
+                        //self::$validation_methods[$rule] = $callback;
 
-                        if($result === false) {
-                          $this->errors[] = array(
-                            'field' => $field,
-                            'value' => $input,
-                            'rule' => self::$validation_methods[$rule],
-                            'param' => $param,
-                          );
+                        if (is_callable(array($this, $method))) {
+                            $result = $this->$method(
+                                $field, $input, $param
+                            );
+
+                            if (is_array($result)) {
+                                if (array_search($result['field'], array_column($this->errors, 'field')) === false) {
+                                    $this->errors[] = $result;
+                                }
+                            }
+
+                        } elseif(isset(self::$validation_methods[$rule])) {
+                            $result = call_user_func(self::$validation_methods[$rule], $field, $input, $param);
+
+                            if($result === false) {
+                                if (array_search($result['field'], array_column($this->errors, 'field')) === false) {
+                                    $this->errors[] = array(
+                                        'field' => $field,
+                                        'value' => $input[$field],
+                                        'rule' => $rule,
+                                        'param' => $param,
+                                    );
+                                }
+                            }
+
+                        } else {
+                            throw new Exception("Validator method '$method' does not exist.");
                         }
-
-                    } else {
-                        throw new Exception("Validator method '$method' does not exist.");
                     }
                 }
             }
         }
 
         return (count($this->errors) > 0) ? $this->errors : true;
-    }
-
-    /**
-     * Overloadable method to invoke validation.
-     *
-     * @param array $input
-     * @param $rules
-     * @param $field
-     *
-     * @return bool
-     */
-    protected function shouldRunValidation(array $input, $rules, $field)
-    {
-        return in_array('required', $rules) || (isset($input[$field]) && trim($input[$field]) != '');
     }
 
     /**
@@ -442,8 +486,8 @@ class GUMP
      * Usage:
      *
      * GUMP::set_field_names(array(
-     * 	"name" => "My Lovely Name",
-     * 	"username" => "My Beloved Username",
+     *  "name" => "My Lovely Name",
+     *  "username" => "My Beloved Username",
      * ));
      *
      * @param array $array
@@ -451,8 +495,55 @@ class GUMP
     public static function set_field_names(array $array)
     {
         foreach ($array as $field => $readable_name) {
-            self::$fields[$field] = $readable_name;
+            self::set_field_name($field, $readable_name);
         }
+    }
+
+    /**
+     * Set a custom error message for a validation rule.
+     *
+     * @param string $rule
+     * @param string $message
+     */
+    public static function set_error_message($rule, $message)
+    {
+        $gump = self::get_instance();
+        self::$validation_methods_errors[$rule] = $message;
+    }
+
+    /**
+     * Set custom error messages for validation rules in an array.
+     *
+     * Usage:
+     *
+     * GUMP::set_error_messages(array(
+     *  "validate_required"     => "{field} is required",
+     *  "validate_valid_email"  => "{field} must be a valid email",
+     * ));
+     *
+     * @param array $array
+     */
+    public static function set_error_messages(array $array)
+    {
+        foreach ($array as $rule => $message) {
+            self::set_error_message($rule, $message);
+        }
+    }
+
+    /**
+     * Get error messages.
+     *
+     * @return array
+     */
+    protected function get_messages()
+    {
+        $lang_file = __DIR__.DIRECTORY_SEPARATOR.'lang'.DIRECTORY_SEPARATOR.$this->lang.'.php';
+        $messages = require $lang_file;
+
+        if ($validation_methods_errors = self::$validation_methods_errors) {
+            $messages = array_merge($messages, $validation_methods_errors);
+        }
+        return $messages;
     }
 
     /**
@@ -473,108 +564,32 @@ class GUMP
 
         $resp = array();
 
+        // Error messages
+        $messages = $this->get_messages();
+
         foreach ($this->errors as $e) {
             $field = ucwords(str_replace($this->fieldCharsToRemove, chr(32), $e['field']));
             $param = $e['param'];
 
-            // Let's fetch explicit field names if they exist
+            // Let's fetch explicitly if the field names exist
             if (array_key_exists($e['field'], self::$fields)) {
                 $field = self::$fields[$e['field']];
+
+                // If param is a field (i.e. equalsfield validator)
+                if (array_key_exists($param, self::$fields)) {
+                    $param = self::$fields[$e['param']];
+                }
             }
 
-            switch ($e['rule']) {
-                case 'mismatch' :
-                    $resp[] = "There is no validation rule for <span class=\"$field_class\">$field</span>";
-                    break;
-                case 'validate_required' :
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field is required";
-                    break;
-                case 'validate_valid_email':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field is required to be a valid email address";
-                    break;
-                case 'validate_max_len':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be $param or shorter in length";
-                    break;
-                case 'validate_min_len':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be $param or longer in length";
-                    break;
-                case 'validate_exact_len':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be exactly $param characters in length";
-                    break;
-                case 'validate_alpha':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain alpha characters(a-z)";
-                    break;
-                case 'validate_alpha_numeric':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain alpha-numeric characters";
-                    break;
-                case 'validate_alpha_dash':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain alpha characters &amp; dashes";
-                    break;
-                case 'validate_numeric':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain numeric characters";
-                    break;
-                case 'validate_integer':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain a numeric value";
-                    break;
-                case 'validate_boolean':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain a true or false value";
-                    break;
-                case 'validate_float':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field may only contain a float value";
-                    break;
-                case 'validate_valid_url':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field is required to be a valid URL";
-                    break;
-                case 'validate_url_exists':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> URL does not exist";
-                    break;
-                case 'validate_valid_ip':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to contain a valid IP address";
-                    break;
-                case 'validate_valid_cc':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to contain a valid credit card number";
-                    break;
-                case 'validate_valid_name':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to contain a valid human name";
-                    break;
-                case 'validate_contains':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to contain one of these values: ".implode(', ', $param);
-                    break;
-                case 'validate_contains_list':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs contain a value from its drop down list";
-                    break;
-                case 'validate_doesnt_contain_list':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field contains a value that is not accepted";
-                    break;
-                case 'validate_street_address':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be a valid street address";
-                    break;
-                case 'validate_date':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be a valid date";
-                    break;
-                case 'validate_min_numeric':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be a numeric value, equal to, or higher than $param";
-                    break;
-                case 'validate_max_numeric':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to be a numeric value, equal to, or lower than $param";
-                    break;
-                case 'validate_starts':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to start with $param";
-                    break;
-                case 'validate_extension':
-                    $resp[] = "The <span class\"$field_class\">$field</span> field can have the following extensions $param";
-                    break;
-                case 'validate_required_file':
-                    $resp[] = "The <span class\"$field_class\">$field</span> field is required";
-                    break;
-                case 'validate_equalsfield':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field does not equal $param field";
-                    break;
-                case 'validate_min_age':
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field needs to have an age greater than or equal to $param";
-                    break;
-                default:
-                    $resp[] = "The <span class=\"$field_class\">$field</span> field is invalid";
+            // Messages
+            if (isset($messages[$e['rule']])) {
+                if (is_array($param)) {
+                    $param = implode(', ', $param);
+                }
+                $message = str_replace('{param}', $param, str_replace('{field}', '<span class="'.$field_class.'">'.$field.'</span>', $messages[$e['rule']]));
+                $resp[] = $message;
+            } else {
+                throw new \Exception ('Rule "'.$e['rule'].'" does not have an error message');
             }
         }
 
@@ -585,7 +600,6 @@ class GUMP
             foreach ($resp as $s) {
                 $buffer .= "<span class=\"$error_class\">$s</span>";
             }
-
             return $buffer;
         }
     }
@@ -605,90 +619,36 @@ class GUMP
 
         $resp = array();
 
-        foreach ($this->errors as $e) {
+        // Error messages
+        $messages = $this->get_messages();
+
+        foreach ($this->errors as $e)
+        {
             $field = ucwords(str_replace(array('_', '-'), chr(32), $e['field']));
             $param = $e['param'];
 
-            // Let's fetch explicit field names if they exist
+            // Let's fetch explicitly if the field names exist
             if (array_key_exists($e['field'], self::$fields)) {
                 $field = self::$fields[$e['field']];
+
+                // If param is a field (i.e. equalsfield validator)
+                if (array_key_exists($param, self::$fields)) {
+                    $param = self::$fields[$e['param']];
+                }
             }
 
-            switch ($e['rule']) {
-                case 'mismatch' :
-                    $resp[$field] = "There is no validation rule for $field";
-                    break;
-                case 'validate_required':
-                    $resp[$field] = "The $field field is required";
-                    break;
-                case 'validate_valid_email':
-                    $resp[$field] = "The $field field is required to be a valid email address";
-                    break;
-                case 'validate_max_len':
-                    $resp[$field] = "The $field field needs to be $param or shorter in length";
-                    break;
-                case 'validate_min_len':
-                    $resp[$field] = "The $field field needs to be $param or longer in length";
-                    break;
-                case 'validate_exact_len':
-                    $resp[$field] = "The $field field needs to be exactly $param characters in length";
-                    break;
-                case 'validate_alpha':
-                    $resp[$field] = "The $field field may only contain alpha characters(a-z)";
-                    break;
-                case 'validate_alpha_numeric':
-                    $resp[$field] = "The $field field may only contain alpha-numeric characters";
-                    break;
-                case 'validate_alpha_dash':
-                    $resp[$field] = "The $field field may only contain alpha characters &amp; dashes";
-                    break;
-                case 'validate_numeric':
-                    $resp[$field] = "The $field field may only contain numeric characters";
-                    break;
-                case 'validate_integer':
-                    $resp[$field] = "The $field field may only contain a numeric value";
-                    break;
-                case 'validate_boolean':
-                    $resp[$field] = "The $field field may only contain a true or false value";
-                    break;
-                case 'validate_float':
-                    $resp[$field] = "The $field field may only contain a float value";
-                    break;
-                case 'validate_valid_url':
-                    $resp[$field] = "The $field field is required to be a valid URL";
-                    break;
-                case 'validate_url_exists':
-                    $resp[$field] = "The $field URL does not exist";
-                    break;
-                case 'validate_valid_ip':
-                    $resp[$field] = "The $field field needs to contain a valid IP address";
-                    break;
-                case 'validate_valid_cc':
-                    $resp[$field] = "The $field field needs to contain a valid credit card number";
-                    break;
-                case 'validate_valid_name':
-                    $resp[$field] = "The $field field needs to contain a valid human name";
-                    break;
-                case 'validate_contains':
-                    $resp[$field] = "The $field field needs to contain one of these values: ".implode(', ', $param);
-                    break;
-                case 'validate_street_address':
-                    $resp[$field] = "The $field field needs to be a valid street address";
-                    break;
-                case 'validate_date':
-                    $resp[$field] = "The $field field needs to be a valid date";
-                    break;
-                case 'validate_min_numeric':
-                    $resp[$field] = "The $field field needs to be a numeric value, equal to, or higher than $param";
-                    break;
-                case 'validate_max_numeric':
-                    $resp[$field] = "The $field field needs to be a numeric value, equal to, or lower than $param";
-                    break;
-                case 'validate_min_age':
-                    $resp[$field] = "The $field field needs to have an age greater than or equal to $param";
-                    break;
-                default:
-                    $resp[$field] = "The $field field is invalid";
+            // Messages
+            if (isset($messages[$e['rule']])) {
+                // Show first validation error and don't allow to be overwritten
+                if (!isset($resp[$e['field']])) {
+                    if (is_array($param)) {
+                        $param = implode(', ', $param);
+                    }
+                    $message = str_replace('{param}', $param, str_replace('{field}', $field, $messages[$e['rule']]));
+                    $resp[$e['field']] = $message;
+                }
+            } else {
+                throw new \Exception ('Rule "'.$e['rule'].'" does not have an error message');
             }
         }
 
@@ -697,9 +657,12 @@ class GUMP
 
     /**
      * Filter the input data according to the specified filter set.
+     * If any filter's parameter contains either '|' or ',', the corresponding default separator can be changed
      *
      * @param mixed $input
      * @param array $filterset
+     * @param string $filters_delimeter
+     * @param string $parameters_delimiter
      *
      * @throws Exception
      *
@@ -707,35 +670,43 @@ class GUMP
      *
      * @throws Exception
      */
-    public function filter(array $input, array $filterset)
+    public function filter(array $input, array $filterset, $filters_delimeter='|', $parameters_delimiter=',')
     {
         foreach ($filterset as $field => $filters) {
             if (!array_key_exists($field, $input)) {
                 continue;
             }
 
-            $filters = explode('|', $filters);
+            $filters = explode($filters_delimeter, $filters);
 
             foreach ($filters as $filter) {
                 $params = null;
 
-                if (strstr($filter, ',') !== false) {
-                    $filter = explode(',', $filter);
+                if (strstr($filter, $parameters_delimiter) !== false) {
+                    $filter = explode($parameters_delimiter, $filter);
 
                     $params = array_slice($filter, 1, count($filter) - 1);
 
                     $filter = $filter[0];
                 }
 
-                if (is_callable(array($this, 'filter_'.$filter))) {
-                    $method = 'filter_'.$filter;
-                    $input[$field] = $this->$method($input[$field], $params);
-                } elseif (function_exists($filter)) {
-                    $input[$field] = $filter($input[$field]);
-                } elseif (isset(self::$filter_methods[$filter])) {
-                    $input[$field] = call_user_func(self::$filter_methods[$filter], $input[$field], $params);
+                if (is_array($input[$field])) {
+                    $input_array = &$input[$field];
                 } else {
-                    throw new Exception("Filter method '$filter' does not exist.");
+                    $input_array = array(&$input[$field]);
+                }
+
+                foreach ($input_array as &$value) {
+                    if (is_callable(array($this, 'filter_'.$filter))) {
+                        $method = 'filter_'.$filter;
+                        $value = $this->$method($value, $params);
+                    } elseif (function_exists($filter)) {
+                        $value = $filter($value);
+                    } elseif (isset(self::$filter_methods[$filter])) {
+                        $value = call_user_func(self::$filter_methods[$filter], $value, $params);
+                    } else {
+                        throw new Exception("Filter method '$filter' does not exist.");
+                    }
                 }
             }
         }
@@ -790,59 +761,6 @@ class GUMP
     {
         return preg_replace("/(?![.=$'€%-])\p{P}/u", '', $value);
     }
-
-    /**
-     * Translate an input string to a desired language [DEPRECIATED].
-     *
-     * Any ISO 639-1 2 character language code may be used
-     *
-     * See: http://www.science.co.il/language/Codes.asp?s=code2
-     *
-     * @param string $value
-     * @param array  $params
-     *
-     * @return string
-     */
-    /*
-    protected function filter_translate($value, $params = NULL)
-    {
-        $input_lang  = 'en';
-        $output_lang = 'en';
-
-        if(is_null($params))
-        {
-            return $value;
-        }
-
-        switch(count($params))
-        {
-            case 1:
-                $input_lang  = $params[0];
-                break;
-            case 2:
-                $input_lang  = $params[0];
-                $output_lang = $params[1];
-                break;
-        }
-
-        $text = urlencode($value);
-
-        $translation = file_get_contents(
-            "http://ajax.googleapis.com/ajax/services/language/translate?v=1.0&q={$text}&langpair={$input_lang}|{$output_lang}"
-        );
-
-        $json = json_decode($translation, true);
-
-        if($json['responseStatus'] != 200)
-        {
-            return $value;
-        }
-        else
-        {
-            return $json['responseData']['translatedText'];
-        }
-    }
-    */
 
     /**
      * Sanitize the string by removing any script tags.
@@ -918,6 +836,19 @@ class GUMP
     }
 
     /**
+     * Sanitize the string by removing illegal characters from float numbers.
+     *
+     * @param string $value
+     * @param array  $params
+     *
+     * @return string
+     */
+    protected function filter_sanitize_floats($value, $params = null)
+    {
+        return filter_var($value, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
+    }
+
+    /**
      * Filter out all HTML tags except the defined basic tags.
      *
      * @param string $value
@@ -941,6 +872,87 @@ class GUMP
     protected function filter_whole_number($value, $params = null)
     {
         return intval($value);
+    }
+
+    /**
+     * Convert MS Word special characters to web safe characters.
+     * [“, ”, ‘, ’, –, …] => [", ", ', ', -, ...]
+     *
+     * @param string $value
+     * @param array  $params
+     *
+     * @return string
+     */
+    protected function filter_ms_word_characters($value, $params = null)
+    {
+        $word_open_double  = '“';
+        $word_close_double = '”';
+        $web_safe_double   = '"';
+
+        $value = str_replace(array($word_open_double, $word_close_double), $web_safe_double, $value);
+
+        $word_open_single  = '‘';
+        $word_close_single = '’';
+        $web_safe_single   = "'";
+
+        $value = str_replace(array($word_open_single, $word_close_single), $web_safe_single, $value);
+
+        $word_em     = '–';
+        $web_safe_em = '-';
+
+        $value = str_replace($word_em, $web_safe_em, $value);
+
+        $word_ellipsis = '…';
+        $web_ellipsis  = '...';
+
+        $value = str_replace($word_ellipsis, $web_ellipsis, $value);
+
+        return $value;
+    }
+
+    /**
+     * Converts to lowercase.
+     *
+     * @param string $value
+     * @param array  $params
+     *
+     * @return string
+     */
+    protected function filter_lower_case($value, $params = null)
+    {
+        return strtolower($value);
+    }
+
+    /**
+     * Converts to uppercase.
+     *
+     * @param string $value
+     * @param array  $params
+     *
+     * @return string
+     */
+    protected function filter_upper_case($value, $params = null)
+    {
+        return strtoupper($value);
+    }
+
+    /**
+     * Converts value to url-web-slugs. 
+     * 
+     * Credit: 
+     * https://stackoverflow.com/questions/40641973/php-to-convert-string-to-slug
+     * http://cubiq.org/the-perfect-php-clean-url-generator
+     *
+     * @param string $value
+     * @param array  $params
+     *
+     * @return string
+     */
+    protected function filter_slug($value, $params = null)
+    {
+        $delimiter = '-';
+        $slug = strtolower(trim(preg_replace('/[\s-]+/', $delimiter, preg_replace('/[^A-Za-z0-9-]+/', $delimiter, preg_replace('/[&]/', 'and', preg_replace('/[\']/', '', iconv('UTF-8', 'ASCII//TRANSLIT', $str))))), $delimiter));
+        return $slug;
     }
 
     // ** ------------------------- Validators ------------------------------------ ** //
@@ -998,6 +1010,10 @@ class GUMP
      */
     protected function validate_contains_list($field, $input, $param = null)
     {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
         $param = trim(strtolower($param));
 
         $value = trim(strtolower($input[$field]));
@@ -1010,10 +1026,10 @@ class GUMP
             return;
         } else {
             return array(
-                    'field' => $field,
-                    'value' => $value,
-                    'rule' => __FUNCTION__,
-                    'param' => $param,
+                'field' => $field,
+                'value' => $value,
+                'rule' => __FUNCTION__,
+                'param' => $param,
             );
         }
     }
@@ -1031,6 +1047,10 @@ class GUMP
      */
     protected function validate_doesnt_contain_list($field, $input, $param = null)
     {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
         $param = trim(strtolower($param));
 
         $value = trim(strtolower($input[$field]));
@@ -1067,10 +1087,10 @@ class GUMP
         }
 
         return array(
-        'field' => $field,
-        'value' => null,
-        'rule' => __FUNCTION__,
-        'param' => $param,
+            'field' => $field,
+            'value' => null,
+            'rule' => __FUNCTION__,
+            'param' => $param,
         );
     }
 
@@ -1149,7 +1169,7 @@ class GUMP
      */
     protected function validate_min_len($field, $input, $param = null)
     {
-        if (!isset($input[$field])) {
+        if (!isset($input[$field]) || empty($input[$field])) {
             return;
         }
 
@@ -1184,7 +1204,7 @@ class GUMP
      */
     protected function validate_exact_len($field, $input, $param = null)
     {
-        if (!isset($input[$field])) {
+        if (!isset($input[$field]) || empty($input[$field])) {
             return;
         }
 
@@ -1278,6 +1298,33 @@ class GUMP
         }
 
 		if (!preg_match('/^([\p{N}\p{L}_-])+$/u', $input[$field]) !== false) { // IC 20160119 allow UTF8
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+
+    /**
+     * Determine if the provided value contains only alpha numeric characters with spaces.
+     *
+     * Usage: '<index>' => 'alpha_numeric_space'
+     *
+     * @param string $field
+     * @param array  $input
+     * @param null   $param
+     *
+     * @return mixed
+     */
+    protected function validate_alpha_numeric_space($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!preg_match("/^([\p{N}\p{L}\s])+$/u", $input[$field]) !== false) { // IC 20160119 allow UTF8
             return array(
                 'field' => $field,
                 'value' => $input[$field],
@@ -1385,8 +1432,9 @@ class GUMP
             return;
         }
 
-        if($input[$field] === true || $input[$field] === false) {
-          return;
+        $booleans = array('1','true',true,1,'0','false',false,0,'yes','no','on','off');
+        if (in_array($input[$field], $booleans, true )) {
+            return;
         }
 
         return array(
@@ -1474,8 +1522,8 @@ class GUMP
             $url = $url['host'];
         }
 
-        if (function_exists('checkdnsrr')) {
-            if (checkdnsrr($url) === false) {
+        if (function_exists('checkdnsrr')  && function_exists('idn_to_ascii')) {
+            if (checkdnsrr(idn_to_ascii($url), 'A') === false) {
                 return array(
                     'field' => $field,
                     'value' => $input[$field],
@@ -1607,6 +1655,23 @@ class GUMP
             $number_length = strlen($number);
         }
 
+
+        /**
+         * Bail out if $number_length is 0. 
+         * This can be the case if a user has entered only alphabets
+         * 
+         * @since 1.5
+         */
+        if( $number_length == 0 ) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+
+
         $parity = $number_length % 2;
 
         $total = 0;
@@ -1654,7 +1719,7 @@ class GUMP
             return;
         }
 
-        if (!preg_match("/^([a-zÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÝàáâãäåçèéêëìíîïñðòóôõöùúûüýÿ '-])+$/i", $input[$field]) !== false) {
+        if (!preg_match("/^([a-z \p{L} '-])+$/i", $input[$field]) !== false) {
             return array(
                 'field' => $field,
                 'value' => $input[$field],
@@ -1745,13 +1810,14 @@ class GUMP
     }
 
     /**
-     * Determine if the provided input is a valid date (ISO 8601).
+     * Determine if the provided input is a valid date (ISO 8601)
+     * or specify a custom format.
      *
      * Usage: '<index>' => 'date'
      *
      * @param string $field
      * @param string $input date ('Y-m-d') or datetime ('Y-m-d H:i:s')
-     * @param null   $param
+     * @param string $param Custom date format
      *
      * @return mixed
      */
@@ -1761,16 +1827,33 @@ class GUMP
             return;
         }
 
-        $cdate1 = date('Y-m-d', strtotime($input[$field]));
-        $cdate2 = date('Y-m-d H:i:s', strtotime($input[$field]));
+        // Default
+        if (!$param)
+        {
+            $cdate1 = date('Y-m-d', strtotime($input[$field]));
+            $cdate2 = date('Y-m-d H:i:s', strtotime($input[$field]));
 
-        if ($cdate1 != $input[$field] && $cdate2 != $input[$field]) {
-            return array(
-                'field' => $field,
-                'value' => $input[$field],
-                'rule' => __FUNCTION__,
-                'param' => $param,
-            );
+            if ($cdate1 != $input[$field] && $cdate2 != $input[$field])
+            {
+                return array(
+                    'field'      => $field,
+                    'value'      => $input[$field],
+                    'rule'       => __FUNCTION__,
+                    'param' => $param,
+                );
+            }
+        } else {
+            $date = \DateTime::createFromFormat($param, $input[$field]);
+
+            if ($date === false || $input[$field] != date($param, $date->getTimestamp()))
+            {
+                return array(
+                    'field'      => $field,
+                    'value'      => $input[$field],
+                    'rule'       => __FUNCTION__,
+                    'param' => $param,
+                );
+            }
         }
     }
 
@@ -1848,7 +1931,7 @@ class GUMP
      */
     protected function validate_min_numeric($field, $input, $param = null)
     {
-        if (!isset($input[$field])) {
+        if (!isset($input[$field]) || $input[$field] === '') {
             return;
         }
 
@@ -1891,7 +1974,7 @@ class GUMP
     }
 
       /**
-       * checks if a file was uploaded.
+       * Checks if a file was uploaded.
        *
        * Usage: '<index>' => 'required_file'
        *
@@ -1902,7 +1985,11 @@ class GUMP
        */
       protected function validate_required_file($field, $input, $param = null)
       {
-          if ($input[$field]['error'] !== 4) {
+          if (!isset($input[$field])) {
+              return;
+          }
+
+          if (is_array($input[$field]) && $input[$field]['error'] !== 4) {
               return;
           }
 
@@ -1915,10 +2002,10 @@ class GUMP
       }
 
     /**
-     * check the uploaded file for extension
-     * for now checks onlt the ext should add mime type check.
+     * Check the uploaded file for extension for now
+     * checks only the ext should add mime type check.
      *
-     * Usage: '<index>' => 'starts,Z'
+     * Usage: '<index>' => 'extension,png;jpg;gif
      *
      * @param string $field
      * @param array  $input
@@ -1927,14 +2014,18 @@ class GUMP
      */
     protected function validate_extension($field, $input, $param = null)
     {
-        if ($input[$field]['error'] !== 4) {
+        if (!isset($input[$field])) {
+            return;
+        }
+
+        if (is_array($input[$field]) && $input[$field]['error'] !== 4) {
             $param = trim(strtolower($param));
             $allowed_extensions = explode(';', $param);
 
             $path_info = pathinfo($input[$field]['name']);
-            $extension = $path_info['extension'];
+            $extension = isset($path_info['extension']) ? $path_info['extension'] : false;
 
-            if (in_array($extension, $allowed_extensions)) {
+            if ($extension && in_array(strtolower($extension), $allowed_extensions)) {
                 return;
             }
 
@@ -1949,6 +2040,7 @@ class GUMP
 
     /**
      * Determine if the provided field value equals current field value.
+     *
      *
      * Usage: '<index>' => 'equalsfield,Z'
      *
@@ -1965,7 +2057,7 @@ class GUMP
         }
 
         if ($input[$field] == $input[$param]) {
-          return;
+            return;
         }
 
         return array(
@@ -2033,12 +2125,13 @@ class GUMP
      * Examples:
      *
      *  555-555-5555: valid
-     *	5555425555: valid
-     *	555 555 5555: valid
-     *	1(519) 555-4444: valid
-     *	1 (519) 555-4422: valid
-     *	1-555-555-5555: valid
-     *	1-(555)-555-5555: valid
+     *  555.555.5555: valid
+     *  5555425555: valid
+     *  555 555 5555: valid
+     *  1(519) 555-4444: valid
+     *  1 (519) 555-4422: valid
+     *  1-555-555-5555: valid
+     *  1-(555)-555-5555: valid
      */
     protected function validate_phone_number($field, $input, $param = null)
     {
@@ -2046,14 +2139,14 @@ class GUMP
             return;
         }
 
-        $regex = '/^(\d[\s-]?)?[\(\[\s-]{0,2}?\d{3}[\)\]\s-]{0,2}?\d{3}[\s-]?\d{4}$/i';
+        $regex = '/^(\d[\s-\.]?)?[\(\[\s-\.]{0,2}?\d{3}[\)\]\s-\.]{0,2}?\d{3}[\s-\.]?\d{4}$/i';
         if (!preg_match($regex, $input[$field])) {
             return array(
-          'field' => $field,
-          'value' => $input[$field],
-          'rule' => __FUNCTION__,
-          'param' => $param,
-        );
+              'field' => $field,
+              'value' => $input[$field],
+              'rule' => __FUNCTION__,
+              'param' => $param,
+            );
         }
     }
 
@@ -2076,16 +2169,16 @@ class GUMP
         $regex = $param;
         if (!preg_match($regex, $input[$field])) {
             return array(
-          'field' => $field,
-          'value' => $input[$field],
-          'rule' => __FUNCTION__,
-          'param' => $param,
-        );
+              'field' => $field,
+              'value' => $input[$field],
+              'rule' => __FUNCTION__,
+              'param' => $param,
+            );
         }
     }
 
     /**
-     * Json validatior.
+     * JSON validator.
      *
      * Usage: '<index>' => 'valid_json_string'
      *
@@ -2102,11 +2195,250 @@ class GUMP
 
         if (!is_string($input[$field]) || !is_object(json_decode($input[$field]))) {
             return array(
-          'field' => $field,
-          'value' => $input[$field],
-          'rule' => __FUNCTION__,
-          'param' => $param,
-        );
+              'field' => $field,
+              'value' => $input[$field],
+              'rule' => __FUNCTION__,
+              'param' => $param,
+            );
         }
     }
-} // EOC
+
+    /**
+     * Check if an input is an array and if the size is more or equal to a specific value.
+     *
+     * Usage: '<index>' => 'valid_array_size_greater,1'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_array_size_greater($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!is_array($input[$field]) || sizeof($input[$field]) < (int)$param) {
+            return array(
+              'field' => $field,
+              'value' => $input[$field],
+              'rule' => __FUNCTION__,
+              'param' => $param,
+            );
+        }
+    }
+
+    /**
+     * Check if an input is an array and if the size is less or equal to a specific value.
+     *
+     * Usage: '<index>' => 'valid_array_size_lesser,1'
+     *
+     * @param string $field
+     * @param array $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_array_size_lesser($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!is_array($input[$field]) || sizeof($input[$field]) > (int)$param) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule'  => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+
+    /**
+     * Check if an input is an array and if the size is equal to a specific value.
+     *
+     * Usage: '<index>' => 'valid_array_size_equal,1'
+     *
+     * @param string $field
+     * @param array $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_array_size_equal($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!is_array($input[$field]) || sizeof($input[$field]) == (int)$param) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule'  => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+
+
+
+    /**
+     * Determine if the input is a valid person name in Persian/Dari or Arabic mainly in Afghanistan and Iran.
+     *
+     * Usage: '<index>' => 'valid_persian_name'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_persian_name($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!preg_match("/^([ا آ أ إ ب پ ت ث ج چ ح خ د ذ ر ز ژ س ش ص ض ط ظ ع غ ف ق ک ك گ ل م ن و ؤ ه ة ی ي ئ ء ّ َ ِ ُ ً ٍ ٌ ْ\x{200B}-\x{200D}])+$/u", $input[$field]) !== false) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+	
+	/**
+     * Determine if the input is a valid person name in English, Persian/Dari/Pashtu or Arabic mainly in Afghanistan and Iran.
+     *
+     * Usage: '<index>' => 'valid_eng_per_pas_name'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_eng_per_pas_name($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!preg_match("/^([A-Za-zÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÒÓÔÕÖßÙÚÛÜÝàáâãäåçèéêëìíîïñðòóôõöùúûüýÿ'\- ا آ أ إ ب پ ت ټ ث څ ج چ ح ځ خ د ډ ذ ر ړ ز ږ ژ س ش ښ ص ض ط ظ ع غ ف ق ک ګ ك گ ل م ن ڼ و ؤ ه ة ی ي ې ۍ ئ ؋ ء ّ َ ِ ُ ً ٍ ٌ ْ \x{200B}-\x{200D} \s])+$/u", $input[$field]) !== false) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+	
+	/**
+     * Determine if the input is valid digits in Persian/Dari, Pashtu or Arabic format.
+     *
+     * Usage: '<index>' => 'valid_persian_digit'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_persian_digit($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!preg_match("/^([۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩])+$/u", $input[$field]) !== false) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+	
+	
+	/**
+     * Determine if the input is a valid text in Persian/Dari or Arabic mainly in Afghanistan and Iran.
+     *
+     * Usage: '<index>' => 'valid_persian_text'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_persian_text($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+		
+        if (!preg_match("/^([ا آ أ إ ب پ ت ث ج چ ح خ د ذ ر ز ژ س ش ص ض ط ظ ع غ ف ق ک ك گ ل م ن و ؤ ه ة ی ي ئ ء ّ َ ِ ُ ً ٍ ٌ \. \/ \\ = \- \| \{ \} \[ \] ؛ : « » ؟ > < \+ \( \) \* ، × ٪ ٫ ٬ ! ۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩\x{200B}-\x{200D} \x{FEFF} \x{22} \x{27} \x{60} \x{B4} \x{2018} \x{2019} \x{201C} \x{201D} \s])+$/u", $input[$field]) !== false) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+	
+	/**
+     * Determine if the input is a valid text in Pashtu mainly in Afghanistan.
+     *
+     * Usage: '<index>' => 'valid_pashtu_text'
+     *
+     * @param string $field
+     * @param array  $input
+     *
+     * @return mixed
+     */
+    protected function validate_valid_pashtu_text($field, $input, $param = null)
+    {
+        if (!isset($input[$field]) || empty($input[$field])) {
+            return;
+        }
+
+        if (!preg_match("/^([ا آ أ ب پ ت ټ ث څ ج چ ح ځ خ د ډ ذ ر ړ ز ږ ژ س ش ښ ص ض ط ظ ع غ ف ق ک ګ ل م ن ڼ و ؤ ه ة ی ې ۍ ي ئ ء ْ ٌ ٍ ً ُ ِ َ ّ ؋ \. \/ \\ = \- \| \{ \} \[ \] ؛ : « » ؟ > < \+ \( \) \* ، × ٪ ٫ ٬ ! ۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩ \x{200B}-\x{200D} \x{FEFF} \x{22} \x{27} \x{60} \x{B4} \x{2018} \x{2019} \x{201C} \x{201D} \s])+$/u", $input[$field]) !== false) {
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param,
+            );
+        }
+    }
+    
+    /**
+     * Determine if the provided value is a valid twitter handle.
+     *
+     * @access protected
+     * @param  string $field
+     * @param  array $input
+     * @return mixed
+     */
+    protected function validate_valid_twitter($field, $input, $param = NULL)
+    {
+        if(!isset($input[$field]) || empty($input[$field]))
+        {
+            return;
+        }
+        $json_twitter = file_get_contents("http://twitter.com/users/username_available?username=".$input[$field]);
+        
+        $twitter_response = json_decode($json_twitter);
+        if($twitter_response->reason != "taken"){
+            return array(
+                'field' => $field,
+                'value' => $input[$field],
+                'rule' => __FUNCTION__,
+                'param' => $param
+            );
+        }
+    }
+    
+}
